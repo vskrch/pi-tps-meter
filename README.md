@@ -1,6 +1,6 @@
 # pi-tps-meter
 
-Tokens per second meter for [pi CLI](https://pi.dev).
+Tokens per second meter for [pi CLI](https://pi.dev) with sparkline visualization.
 
 ## Install
 
@@ -8,20 +8,30 @@ Tokens per second meter for [pi CLI](https://pi.dev).
 pi install npm:pi-tps-meter
 ```
 
-## Usage
+## Features
 
-Footer shows live stats during and after streaming:
-
+**During streaming** — live animated display:
 ```
-⚡ 42 tps          (during streaming, updates every 500ms)
-TPS: 42 avg | μ 39 | p95 61   (after message completes)
+⠋ ▓▓▓▓▓▓░░░░ 42 tps
 ```
 
-- **avg** — rolling average over last 60 seconds
-- **μ** — all-time mean
-- **p95** — 95th percentile of all measurements
+**After message** — aggregate stats:
+```
+TPS: ▓▓▓▓ 42 | μ 39 | p95 61
+```
 
-No config needed. Works out of the box.
+**Color coding:**
+- 🟢 Green: >50 tps (fast)
+- 🟡 Yellow: 20-50 tps (medium)
+- 🔴 Red: <20 tps (slow)
+
+## Optimizations
+
+- Single shared timer (no per-event timers)
+- Fixed-size circular buffer (zero allocations in hot path)
+- Bitwise token estimation
+- 200ms update throttle during streaming
+- Insertion sort for p95 (fast for ≤500 elements)
 
 ## Author
 
