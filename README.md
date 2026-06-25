@@ -30,9 +30,17 @@ pi install npm:pi-tps-meter
 ## Accuracy
 
 - Uses the provider's **real** output token count (`message.usage.output`); the
-  bitwise char/4 estimate is only a fallback for providers that don't report usage
+  char/4 estimate is only a fallback for providers that don't report usage
 - Rate is measured from the **first token**, so time-to-first-token (network/queue
   latency) doesn't drag down the reported tps
+- Tracks **thinking tokens** (`thinking_delta`) alongside text, so models with
+  extended thinking report accurate generation speed
+
+## Stats
+
+- **avg**: rolling 60-second window (resets older samples)
+- **μ**: all-time mean across the session
+- **p95**: 95th percentile, all-time (up to 500 samples)
 
 ## Optimizations
 
