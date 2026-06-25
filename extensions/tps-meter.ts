@@ -2,12 +2,13 @@
  * TPS Meter v3 — Tokens Per Second with Sparkline Trend
  *
  * Footer display:
- *   Streaming:  ⠹ ▁▂▃▅▇▆▅▃▂▁ 42 tps
- *   Complete:   TPS ▁▂▃▅▇▆▅▃▂▁ 42 avg | μ 39 | p95 61
+ *   Streaming:  ⠹ ▕███████▋···▏ 47 tps   (smooth, animated, auto-scaled gauge)
+ *   Complete:   ▁▄▇▅▂▁▇█▅▃▆▇ 42 tps · μ 39 · p95 61
  *
  * Features:
- *   - Real sparkline: ▁▂▃▄▅▆▇█ showing TPS trend over last 12 messages
- *   - Color-coded sparkline by speed
+ *   - Live sub-cell gauge (1/8-cell resolution) that fills as you stream
+ *   - Min-max normalized sparkline (▁▂▃▄▅▆▇█) so the trend's shape is readable
+ *   - Color-coded by speed (green fast / yellow mid / red slow)
  *   - Animated spinner during streaming
  *   - Rolling 60s window for avg, all-time for μ and p95
  *
@@ -34,8 +35,15 @@ const ALLTIME_CAP = 500;
 const FAST = 50;
 const MED = 20;
 
-// --- Sparkline chars (8 levels) ---
+// --- Sparkline chars (8 vertical levels) ---
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+// --- Horizontal partial blocks for the live gauge (1/8th-cell resolution) ---
+// index = eighths of a cell that are filled (0 = empty .. 7 = ▉); 8 = full "█"
+const HBLOCKS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+const GAUGE_LEN = 11; // gauge width in cells
+const GAUGE_FLOOR = 40; // tps that reads as a "full-ish" bar before we have history
+const TRACK = "·"; // faint empty-track glyph (less janky than blank space)
 
 // --- State ---
 let streamStartMs = 0;
@@ -170,21 +178,33 @@ function sparkline(theme: any): string {
     vals[i] = sparkBuf[(oldest + i) % SPARK_LEN];
   }
 
-  // Normalize against local max
-  let localMax = 1;
+  // Min-max normalize over the window so the trend's *shape* is visible.
+  // (Normalizing by max alone squashes 40/42/45 into a flat top — the old jank.)
+  let mn = Infinity;
+  let mx = 0;
   for (let i = 0; i < sparkLen; i++) {
-    if (vals[i] > localMax) localMax = vals[i];
-  }
-  // Also consider historical max
-  if (sparkMax > localMax) localMax = sparkMax;
-
-  let result = "";
-  for (let i = 0; i < SPARK_LEN; i++) {
     const v = vals[i];
-    const norm = Math.min(7, Math.round((v / localMax) * 7));
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  const range = mx - mn;
+
+  // Pad the left so a partial window is right-aligned (newest at the right edge).
+  const pad = SPARK_LEN - sparkLen;
+  let result = pad > 0 ? theme.fg("dim", TRACK.repeat(pad)) : "";
+
+  for (let i = 0; i < sparkLen; i++) {
+    const v = vals[i];
+    // Flat series -> mid-height bar; otherwise spread across the full 0..7 range.
+    const norm =
+      range < 1e-6
+        ? mx > 0
+          ? 4
+          : 0
+        : Math.min(7, Math.max(0, Math.round(((v - mn) / range) * 7)));
     const ch = BLOCKS[norm];
 
-    // Color each block by speed
+    // Color each bar by absolute speed (green fast / yellow mid / red slow).
     let colored: string;
     if (v >= FAST) colored = theme.fg("success", ch);
     else if (v >= MED) colored = theme.fg("warning", ch);
@@ -195,6 +215,35 @@ function sparkline(theme: any): string {
   sparkCache = result;
   sparkDirty = false;
   return result;
+}
+
+// --- Live gauge (smooth sub-cell horizontal bar) ---
+
+function gauge(tps: number, theme: any): string {
+  // Auto-scale to the session peak with a sane floor, so the bar is stable
+  // (no wild rescaling) yet still meaningful across slow and fast models.
+  const scale = Math.max(sparkMax, GAUGE_FLOOR);
+  let frac = scale > 0 ? tps / scale : 0;
+  if (frac < 0) frac = 0;
+  if (frac > 1) frac = 1;
+
+  const eighths = Math.round(frac * GAUGE_LEN * 8);
+  const full = (eighths / 8) | 0;
+  const rem = eighths % 8;
+
+  let fill = "█".repeat(full);
+  let used = full;
+  if (full < GAUGE_LEN && rem > 0) {
+    fill += HBLOCKS[rem];
+    used++;
+  }
+  const track = TRACK.repeat(GAUGE_LEN - used);
+
+  return (
+    theme.fg("dim", "▕") +
+    speedColor(tps, fill, theme) +
+    theme.fg("dim", track + "▏")
+  );
 }
 
 // --- Spinner ---
@@ -221,10 +270,14 @@ function renderLive(theme: any): string {
   const ref = firstTokenMs > 0 ? firstTokenMs : streamStartMs;
   const elapsed = (now() - ref) / 1000;
   const tps = elapsed > 0.3 ? streamTokens / elapsed : 0;
-  const s = spin();
-  const sp = sparkline(theme);
-  const num = speedColor(tps, `${fmt(tps)} tps`, theme);
-  return `${theme.fg("accent", s)} ${sp} ${num}`;
+
+  // Live, animated, sub-cell gauge that fills as generation speeds up — this is
+  // the moving "graph" during streaming (the historical sparkline is static).
+  const s = theme.fg("accent", spin());
+  const g = gauge(tps, theme);
+  const num = speedColor(tps, `${fmt(tps)}`, theme);
+  const unit = theme.fg("dim", "tps");
+  return `${s} ${g} ${num} ${unit}`;
 }
 
 function renderFinal(theme: any): string {
@@ -235,10 +288,12 @@ function renderFinal(theme: any): string {
 
   const sp = sparkline(theme);
   const a = speedColor(avg, fmt(avg), theme);
-  const m = speedColor(mu, `μ ${fmt(mu)}`, theme);
-  const p = speedColor(p95, `p95 ${fmt(p95)}`, theme);
+  const sep = theme.fg("dim", "·");
+  const m = `${theme.fg("dim", "μ")} ${speedColor(mu, fmt(mu), theme)}`;
+  const p = `${theme.fg("dim", "p95")} ${speedColor(p95, fmt(p95), theme)}`;
+  const label = theme.fg("dim", "tps");
 
-  return `TPS ${sp} ${a} avg | ${m} | ${p}`;
+  return `${sp} ${a} ${label} ${sep} ${m} ${sep} ${p}`;
 }
 
 // --- Single shared timer ---

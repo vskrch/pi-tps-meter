@@ -1,6 +1,6 @@
 {
   "name": "pi-tps-meter",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Tokens per second meter for pi CLI — live TPS, rolling avg, mean, p95",
   "author": "Venkata Sai Chirasani",
   "license": "MIT",

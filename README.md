@@ -10,14 +10,16 @@ pi install npm:pi-tps-meter
 
 ## Features
 
-**During streaming** — live animated display:
+**During streaming** — a smooth, animated gauge that fills with live speed
+(1/8-cell resolution, auto-scaled to your session's peak):
 ```
-⠋ ▓▓▓▓▓▓░░░░ 42 tps
+⠹ ▕███████▋···▏ 47 tps
 ```
 
-**After message** — aggregate stats:
+**After a message** — a min-max normalized sparkline of your last 12 messages
+(newest on the right) plus aggregate stats:
 ```
-TPS: ▓▓▓▓ 42 | μ 39 | p95 61
+▁▄▇▅▂▁▇█▅▃▆▇ 42 tps · μ 39 · p95 61
 ```
 
 **Color coding:**
