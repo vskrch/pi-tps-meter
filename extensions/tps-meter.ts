@@ -11,11 +11,16 @@
  *   - Animated spinner during streaming
  *   - Rolling 60s window for avg, all-time for μ and p95
  *
+ * Accuracy:
+ *   - Uses the provider's real output token count (message.usage.output);
+ *     bitwise char/4 estimate is only a fallback for providers without usage
+ *   - Rate measured from first token (excludes time-to-first-token latency)
+ *
  * Optimizations:
- *   - Fixed ring buffer (no allocations)
- *   - Bitwise token estimation
- *   - Single shared timer
- *   - Insertion sort for p95
+ *   - Fixed ring buffers (no allocations in the streaming repaint path)
+ *   - Memoized sparkline (rebuilt once per message, not every tick)
+ *   - Single shared 200ms timer, torn down on message_end and agent_end
+ *   - Insertion sort for p95 (cold path, ≤500 elements)
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -34,6 +39,7 @@ const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 // --- State ---
 let streamStartMs = 0;
+let firstTokenMs = 0; // when the first delta arrived (excludes TTFT from rate)
 let streamChars = 0;
 let streamTokens = 0;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -55,6 +61,9 @@ const sparkBuf = new Float64Array(SPARK_LEN);
 let sparkLen = 0;
 let sparkHead = 0;
 let sparkMax = 1; // track max for normalization
+let sparkCache = ""; // memoized rendered sparkline (only changes once per message)
+let sparkDirty = true;
+let sparkTheme: unknown = null; // invalidate cache if the theme changes mid-session
 
 // --- Helpers ---
 
@@ -89,6 +98,7 @@ function sparkPush(tps: number): void {
   if (tps > sparkMax) sparkMax = tps;
   // Decay max slowly so sparkline adapts
   if (sparkMax > 10) sparkMax *= 0.99;
+  sparkDirty = true;
 }
 
 function winAvg(): number {
@@ -138,7 +148,20 @@ function fmt(v: number): string {
 // --- Sparkline rendering ---
 
 function sparkline(theme: any): string {
-  if (sparkLen === 0) return theme.fg("dim", "▁".repeat(SPARK_LEN));
+  // Sparkline data only changes once per message (sparkPush), so memoize the
+  // rendered string instead of re-allocating + recoloring on every 200ms tick.
+  // Invalidate if the active theme changed (user switched themes mid-session).
+  if (theme !== sparkTheme) {
+    sparkDirty = true;
+    sparkTheme = theme;
+  }
+  if (!sparkDirty) return sparkCache;
+
+  if (sparkLen === 0) {
+    sparkCache = theme.fg("dim", "▁".repeat(SPARK_LEN));
+    sparkDirty = false;
+    return sparkCache;
+  }
 
   // Read ring buffer in order (oldest first)
   const vals = new Float64Array(SPARK_LEN);
@@ -169,6 +192,8 @@ function sparkline(theme: any): string {
 
     result += colored;
   }
+  sparkCache = result;
+  sparkDirty = false;
   return result;
 }
 
@@ -191,7 +216,10 @@ function speedColor(tps: number, text: string, theme: any): string {
 // --- Rendering ---
 
 function renderLive(theme: any): string {
-  const elapsed = (now() - streamStartMs) / 1000;
+  // Measure generation rate from the first token, not from message_start, so
+  // network/queue latency (TTFT) doesn't drag the reported speed down.
+  const ref = firstTokenMs > 0 ? firstTokenMs : streamStartMs;
+  const elapsed = (now() - ref) / 1000;
   const tps = elapsed > 0.3 ? streamTokens / elapsed : 0;
   const s = spin();
   const sp = sparkline(theme);
@@ -242,6 +270,7 @@ export default function tpsMeter(pi: ExtensionAPI): void {
   pi.on("message_start", async (event, ctx) => {
     if (event.message.role !== "assistant") return;
     streamStartMs = now();
+    firstTokenMs = 0;
     streamChars = 0;
     streamTokens = 0;
     streaming = true;
@@ -255,6 +284,8 @@ export default function tpsMeter(pi: ExtensionAPI): void {
     const evt = event.assistantMessageEvent;
     if (evt.type === "text_delta" || evt.type === "thinking_delta") {
       const d = evt.delta as string;
+      if (!d) return;
+      if (firstTokenMs === 0) firstTokenMs = now();
       streamChars += d.length;
       streamTokens = tokEst(streamChars);
     }
@@ -265,10 +296,18 @@ export default function tpsMeter(pi: ExtensionAPI): void {
     streaming = false;
     stopTick();
 
-    const elapsed = (now() - streamStartMs) / 1000;
-    if (elapsed < 0.1 || streamTokens === 0) return;
+    // Prefer the provider's real output token count; fall back to the char
+    // estimate only when usage is unavailable (e.g. some local providers).
+    const realOut = event.message?.usage?.output;
+    const tokens =
+      typeof realOut === "number" && realOut > 0 ? realOut : streamTokens;
 
-    const tps = streamTokens / elapsed;
+    // Rate is generation-only: from first token to end, excluding TTFT.
+    const ref = firstTokenMs > 0 ? firstTokenMs : streamStartMs;
+    const elapsed = (now() - ref) / 1000;
+    if (elapsed < 0.1 || tokens === 0) return;
+
+    const tps = tokens / elapsed;
 
     // Record to all buffers
     winPush(tps, now());
@@ -279,10 +318,19 @@ export default function tpsMeter(pi: ExtensionAPI): void {
     if (txt) ctx.ui.setStatus("tps", txt);
   });
 
+  // Safety net: if a stream is aborted (Esc/Ctrl-C) or errors, message_end may
+  // not fire for that message — agent_end always does. Without this the 200ms
+  // timer would keep repainting a stale live number indefinitely.
+  pi.on("agent_end", async () => {
+    streaming = false;
+    stopTick();
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     streaming = false;
     stopTick();
     streamStartMs = 0;
+    firstTokenMs = 0;
     streamChars = 0;
     streamTokens = 0;
     winLen = 0;
@@ -293,6 +341,9 @@ export default function tpsMeter(pi: ExtensionAPI): void {
     sparkLen = 0;
     sparkHead = 0;
     sparkMax = 1;
+    sparkCache = "";
+    sparkDirty = true;
+    sparkTheme = null;
     spinI = 0;
     ctx.ui.setStatus("tps", undefined);
   });

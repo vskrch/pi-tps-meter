@@ -25,13 +25,20 @@ TPS: ▓▓▓▓ 42 | μ 39 | p95 61
 - 🟡 Yellow: 20-50 tps (medium)
 - 🔴 Red: <20 tps (slow)
 
+## Accuracy
+
+- Uses the provider's **real** output token count (`message.usage.output`); the
+  bitwise char/4 estimate is only a fallback for providers that don't report usage
+- Rate is measured from the **first token**, so time-to-first-token (network/queue
+  latency) doesn't drag down the reported tps
+
 ## Optimizations
 
-- Single shared timer (no per-event timers)
-- Fixed-size circular buffer (zero allocations in hot path)
-- Bitwise token estimation
-- 200ms update throttle during streaming
-- Insertion sort for p95 (fast for ≤500 elements)
+- Single shared 200ms timer, torn down on both `message_end` and `agent_end`
+  (no runaway timer if a stream is aborted)
+- Fixed-size circular buffers (no allocations in the streaming repaint path)
+- Memoized sparkline (rebuilt once per message, not on every tick)
+- Insertion sort for p95 (cold path, runs once per message for ≤500 elements)
 
 ## Author
 
