@@ -1,22 +1,43 @@
 {
   "name": "pi-tps-meter",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "Tokens per second meter for pi CLI — live TPS, rolling avg, mean, p95",
   "author": "Venkata Sai Chirasani",
   "license": "MIT",
-  "keywords": ["pi-package", "pi-extension", "tps", "tokens-per-second", "performance"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "tps",
+    "tokens-per-second",
+    "performance"
+  ],
   "scripts": {
     "test": "node tps-sim.test.ts"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=3.0.0",
     "@earendil-works/pi-ai": ">=0.5.0",
     "@earendil-works/pi-agent-core": ">=0.5.0"
   },
-  "files": ["extensions"],
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-agent-core": {
+      "optional": true
+    }
+  },
+  "files": [
+    "extensions"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vskrch/pi-tps-meter.git"
