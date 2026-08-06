@@ -337,7 +337,10 @@ export default function tpsMeter(pi: ExtensionAPI): void {
     if (event.message.role !== "assistant") return;
     if (!event.assistantMessageEvent) return;
     const evt = event.assistantMessageEvent;
-    if (evt.type === "text_delta" || evt.type === "thinking_delta") {
+    // Count tool-call argument generation too: writing long files / commands
+    // streams their content as `toolcall_delta` tokens, which otherwise look
+    // like 0 TPS. text/thinking already count; toolcall was the missing branch.
+    if (evt.type === "text_delta" || evt.type === "thinking_delta" || evt.type === "toolcall_delta") {
       const d = evt.delta as string;
       if (!d) return;
       if (firstTokenMs === 0) firstTokenMs = now();
